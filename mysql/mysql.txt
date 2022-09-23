@@ -1,0 +1,223 @@
+# Установка репозитория Oracle MySQL 8.0
+rpm -Uvh https://repo.mysql.com/mysql80-community-release-el7-6.noarch.rpm
+rpm --import https://repo.mysql.com/RPM-GPG-KEY-mysql-2022
+
+# Включаем репозиторий
+sed -i 's/enabled=1/enabled=0/' /etc/yum.repos.d/mysql-community.repo
+
+# Устанавливаем MySQL
+yum --enablerepo=mysql80-community install mysql-community-server
+
+# Запускаем
+systemctl start mysqld
+
+# Ставим в автозагрузку
+systemctl enable mysqld
+
+# Выясняем временный пароль
+grep "A temporary password" /var/log/mysqld.log
+
+# Запускаем скрипт безопасности для MySQL
+mysql_secure_installation
+
+# Заходим с паролем
+mysql -uroot -p
+
+# Устанавливаем пароль
+ALTER USER 'root'@'localhost' IDENTIFIED WITH 'caching_sha2_password' BY 'Testpass1$';
+
+# Тип бинлога
+show variables like '%binlog%';
+
+# Найти server_id
+SELECT @@server_id;
+
+# Начинаем слушать на всех IP /etc/my.cnf
+bind-address = 0.0.0.0
+
+# На ARM1
+
+# Создаём пользователя для репликации
+CREATE USER repl@'%' IDENTIFIED WITH 'caching_sha2_password' BY 'Gaz12345!'; 
+# Даём права на репликацию
+GRANT REPLICATION SLAVE ON *.* TO repl@'%';
+
+# Смотрим пользователей
+SELECT User, Host FROM mysql.user;
+
+# Смотрим статус Мастера
+SHOW MASTER STATUS;
+
+
+# На ARM2
+
+# Установка репозитория Oracle MySQL 8.0
+rpm -Uvh https://repo.mysql.com/mysql80-community-release-el7-6.noarch.rpm
+rpm --import https://repo.mysql.com/RPM-GPG-KEY-mysql-2022
+
+# Включаем репозиторий
+sed -i 's/enabled=1/enabled=0/' /etc/yum.repos.d/mysql-community.repo
+
+# Устанавливаем MySQL
+yum --enablerepo=mysql80-community install mysql-community-server
+
+# Запускаем
+systemctl start mysqld
+
+# Ставим в автозагрузку
+systemctl enable mysqld
+
+# Выясняем временный пароль
+grep "A temporary password" /var/log/mysqld.log
+
+# Запускаем скрипт безопасности для MySQL
+mysql_secure_installation
+
+# Заходим с паролем
+mysql -uroot -p
+
+# Смотрим статус Слейва
+SHOW MASTER STATUS;
+#правим сервер id в конфиге
+sudo nano /etc/my.cnf
+
+server_id = 2
+
+systemctl restart mysqld
+
+SHOW GLOBAL VARIABLES LIKE 'caching_sha2_password_public_key_path';
+SHOW STATUS LIKE 'Caching_sha2_password_rsa_public_key'\G
+
+# необходимо получить публичный ключ
+STOP SLAVE;
+CHANGE MASTER TO MASTER_HOST='ip', MASTER_USER='repl', MASTER_PASSWORD='Gaz12345!, MASTER_LOG_FILE='binlog.', MASTER_LOG_POS=, GET_MASTER_PUBLIC_KEY = 1;
+START SLAVE;
+show slave status\G
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# https://dev.mysql.com/doc/refman/8.0/en/replica-logs-relaylog.html
+# можем настроить наш relay.log
+show variables like '%relay%';
+
+# посмотрим статусы репликации
+use performance_schema;
+show tables like '%replic%';
+show variables like '%log_bin%';
+show variables like '%binlog%';
+show variables like '%read%';
+
+# рекомендуется включать для слейва, иначе на слейве тоже можем вносить изменения
+# /etc/my.cnf
+innodb_read_only = 1
+
+
+# КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ СОСТОЯНИЕМ
+STOP SLAVE;
+START SLAVE;
+
+# Создание таблицы
+create table test_tbl (id int);
+
+# Добавляем строчки
+insert into test_tbl values (2),(3),(4);
+
+# варианты разрешения конфликтов
+1. удалить на слейве блокирующую запись
+2. STOP SLAVE;
+RESET SLAVE;
+SHOW SLAVE STATUS; # на мастере
+# новый номер позиции в бинлоге
+
+START SLAVE;
+
+3. скипаем 1 ошибку
+stop slave; 
+set global sql_slave_skip_counter=1; 
+start slave;
+
+# скрипт избавления от дубликатов при репликации
+while [ 1 ]; do      
+if [ `mysql -uroot -ptest -e"show slave status \G;" | grep "Duplicate entry" | wc -l` -eq 2 ] ; then          
+mysql -uroot -ptest -e "stop slave; set global sql_slave_skip_counter=1; start slave;";      
+fi;      
+mysql -uroot -ptest -e "show slave status\G";  
+done
+
+4. можно добавить в конфиг игнор ошибки при репликации
+ну для duplicate entry например ошибка номер 1062
+в конфиг добавляется
+slave-skip-errors = 1062
+
+################### Бекапы
+mysqldump --help
+
+# Бекап без создания таблиц
+mysqldump --all-databases --no-create-info -u root -p > dump-data.sql
+
+# C сохранением позиции бинлога
+mysqldump -h 10.128.15.220 -p --all-databases --events --routines --master-data=2 > dump_file
+
+# Скачивание бинлогов
+# стандартный бэкап 1 файла
+mysqlbinlog -R -h 10.128.15.201 -p --raw binlog.000001
+
+# бэкапы без остановки начиная с 1 файла
+mysqlbinlog -R -h 10.128.15.201 -p --raw --stop-never binlog.000001
+
+# заливаем данные
+mysql -u root -p < dump-data.sql
+
+# Проигрываем изменение из бинлога
+mysqlbinlog --start-position=4596 binlog.000004 | mysql
+
+
+
+
